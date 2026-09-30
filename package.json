@@ -15,6 +15,7 @@
     "hydrate:cdn": "node scripts/hydrate-cdn-cache.mjs",
     "build": "node packages/cli/src/build-texture-viewer.mjs",
     "serve": "node packages/web/server.mjs",
+    "minigame": "node tools/minigame/analyze-wechat.mjs",
     "spine": "node packages/cli/src/extract-cocos-spine-packs.mjs",
     "font": "node packages/cli/src/extract-bitmap-font.mjs",
     "particle": "node packages/cli/src/extract-har-particles.mjs",
@@ -31,6 +32,7 @@
     "playwright": "^1.49.1"
   },
   "dependencies": {
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "texture2ddecoder-wasm": "^1.2.5"
   }
 }

@@ -22,7 +22,7 @@ import {
 } from 'fs';
 import { join, extname, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { networkInterfaces } from 'os';
+import { networkInterfaces, homedir } from 'os';
 import {
   buildSlotmillTab,
   buildPragmaticTab,
@@ -250,7 +250,78 @@ function serveStatic(req, res) {
   res.end(readFileSync(file));
 }
 
+const REPO_ROOT = join(__dirname, '..', '..');
+const MINIGAME_DIR = join(REPO_ROOT, 'dist', 'minigame');
+
+function sendJsonFile(res, file) {
+  if (!existsSync(file)) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(readFileSync(file));
+}
+
+function wechatReanalyzePrompt() {
+  const cacheDir = join(
+    homedir(),
+    'Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/radium/users',
+  );
+  const script = join(REPO_ROOT, 'tools/minigame/analyze-wechat.mjs');
+  const catalog = join(ROOT, 'catalog.json');
+  const embedded = join(ROOT, 'embedded');
+  const audio = join(ROOT, 'audio');
+  const index = join(MINIGAME_DIR, 'index.json');
+  return `请更新本机已缓存的微信小游戏静态分析。查看器只读下面这些本地产物，不自己扫描。每个游戏单独一个来源，不要把多个游戏的资源放进同一个 tab。
+
+只读微信缓存，不要改这个目录：
+${cacheDir}
+
+分析脚本：
+${script}
+执行：node ${script}
+
+产物写到这些本地路径：
+${catalog}
+${embedded}/<游戏id>/
+${audio}/<游戏id>/
+${join(ROOT, 'animations')}/<游戏id>/
+${join(ROOT, 'fonts')}/<游戏id>/
+${index}
+${join(MINIGAME_DIR, '<游戏id>.json')}
+
+不要改微信缓存，不要把包写回去，不要把 game.js 全文贴进对话，不要自动发给 taxon，不要写入公网 Kura。
+完成后对照 ${index}，说明新增或变化的游戏、包数量，以及每个来源里的纹理和音频数量。查看器刷新 http://127.0.0.1:${PORT}/ 即可。
+`;
+}
+
+function serveMinigame(req, res) {
+  const urlPath = req.url.split('?')[0];
+  if (urlPath === '/wechat-reanalyze-prompt') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(wechatReanalyzePrompt());
+    return true;
+  }
+  if (urlPath === '/minigame' || urlPath === '/minigame.html') {
+    res.writeHead(302, { Location: '/' });
+    res.end();
+    return true;
+  }
+  if (urlPath === '/minigame/index.json') {
+    sendJsonFile(res, join(MINIGAME_DIR, 'index.json'));
+    return true;
+  }
+  const match = urlPath.match(/^\/minigame\/results\/([A-Za-z0-9._-]+)\.json$/);
+  if (match) {
+    sendJsonFile(res, join(MINIGAME_DIR, `${match[1]}.json`));
+    return true;
+  }
+  return false;
+}
+
 const server = createServer((req, res) => {
+  if (req.method === 'GET' && serveMinigame(req, res)) return;
   if (req.method === 'POST' && req.url.split('?')[0] === '/upload') {
     handleUpload(req, res);
     return;
@@ -271,4 +342,5 @@ server.listen(PORT, HOST, () => {
   }
   console.log(`Serving: ${ROOT}`);
   console.log('Upload a HAR: POST /upload (raw body, header x-file-name)');
+  console.log('微信小游戏和 HAR 共用本页的来源标签');
 });

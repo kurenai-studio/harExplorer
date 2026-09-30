@@ -89,7 +89,15 @@
       background: rgba(108, 158, 255, 0.12);
     }
     .tab.missing { opacity: 0.45; cursor: not-allowed; }
-    .tabs-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    .source-board { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .source-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .source-kicker {
+      flex: 0 0 auto;
+      min-width: 5.5em;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .tabs-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 0; flex: 1; }
     .tabs-row .tabs { margin-top: 0; }
     .tab-add {
       border-style: dashed;
@@ -99,6 +107,22 @@
     }
     .tab-add:hover { background: rgba(167, 139, 250, 0.12); color: var(--text); }
     .tab-add.busy { opacity: 0.6; cursor: progress; pointer-events: none; }
+    #minigame-prompt-box {
+      display: none;
+      margin-top: 8px;
+      white-space: pre-wrap;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      max-height: 180px;
+      overflow: auto;
+      user-select: text;
+    }
+    #minigame-prompt-box.show { display: block; }
     .upload-hint { font-size: 0.8rem; color: var(--muted); }
     .upload-hint.error { color: #f87171; }
     .upload-hint.ok { color: var(--ok); }
@@ -492,12 +516,25 @@
   <header>
     <h1 id="title">HAR Texture Viewer</h1>
     <div class="meta" id="subtitle"></div>
-    <div class="tabs-row">
-      <div class="tabs" id="tabs"></div>
-      <button type="button" class="tab tab-add" id="add-har-btn" title="上传一个新的 HAR（自动识别引擎）">＋ 新 HAR</button>
-      <span class="upload-hint" id="upload-hint"></span>
-      <input type="file" id="har-file-input" accept=".har,application/json" style="display:none" />
+    <div class="source-board">
+      <div class="source-group">
+        <div class="source-kicker">微信小游戏</div>
+        <div class="tabs-row">
+          <div class="tabs" id="wechat-tabs"></div>
+          <button type="button" class="tab tab-add" id="reanalyze-wechat" title="复制一段提示词，交给 agent 重新分析本机微信包，并写回本页的产物目录">重新分析</button>
+        </div>
+      </div>
+      <div class="source-group">
+        <div class="source-kicker">HAR</div>
+        <div class="tabs-row">
+          <div class="tabs" id="tabs"></div>
+          <button type="button" class="tab tab-add" id="add-har-btn" title="上传一个新的 HAR（自动识别引擎）">＋ 新 HAR</button>
+          <input type="file" id="har-file-input" accept=".har,application/json" style="display:none" />
+        </div>
+      </div>
     </div>
+    <span class="upload-hint" id="upload-hint"></span>
+    <pre id="minigame-prompt-box" hidden></pre>
     <div class="mode-tabs">
       <button type="button" class="mode-tab active" data-mode="textures">纹理浏览</button>
       <button type="button" class="mode-tab" data-mode="animations" id="mode-anim-btn">动画预览</button>
@@ -716,6 +753,7 @@
     const extEl = document.getElementById('ext-filter');
     const typeEl = document.getElementById('type-filter');
     const tabsEl = document.getElementById('tabs');
+    const wechatTabsEl = document.getElementById('wechat-tabs');
 
     const TYPE_LABELS = {
       spine: 'Spine',
@@ -727,6 +765,7 @@
 
     function renderTabs() {
       tabsEl.innerHTML = '';
+      wechatTabsEl.innerHTML = '';
       for (const tab of tabs) {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -740,7 +779,8 @@
           if (tab.id === activeTab?.id) return;
           activateTab(tab);
         };
-        tabsEl.appendChild(btn);
+        const host = tab.meta?.container === 'wechat' ? wechatTabsEl : tabsEl;
+        host.appendChild(btn);
       }
     }
 
@@ -776,7 +816,10 @@
         ensureParticleManifest().then(() => renderParticleList());
       } else if (viewMode === 'audio') {
         ensureAudioManifest().then(() => renderAudioList());
-      } else applyFilters();
+      } else {
+        applyFilters();
+        if (filtered.length) selectTexture(filtered[0]);
+      }
     }
 
     function setUploadHint(msg, cls) {
@@ -830,6 +873,69 @@
         btn.classList.remove('busy');
       }
     }
+
+    function copyWithSelection(text) {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.top = '0';
+      area.style.left = '0';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch {
+        ok = false;
+      }
+      area.remove();
+      return ok;
+    }
+
+    function showPromptForManualCopy(text) {
+      const box = document.getElementById('minigame-prompt-box');
+      box.hidden = false;
+      box.textContent = text;
+      box.classList.add('show');
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    document.getElementById('reanalyze-wechat').onclick = async () => {
+      const box = document.getElementById('minigame-prompt-box');
+      let text = '';
+      try {
+        const res = await fetch('/wechat-reanalyze-prompt', { cache: 'no-store' });
+        if (!res.ok) throw new Error('提示词接口不可用');
+        text = await res.text();
+      } catch (err) {
+        setUploadHint(`拿不到提示词：${err.message}`, 'error');
+        return;
+      }
+      let ok = copyWithSelection(text);
+      if (!ok) {
+        try {
+          await navigator.clipboard.writeText(text);
+          ok = true;
+        } catch {
+          ok = false;
+        }
+      }
+      if (ok) {
+        box.hidden = true;
+        box.classList.remove('show');
+        setUploadHint('已复制重新分析的提示词。贴给 agent 后刷新本页。', 'ok');
+        return;
+      }
+      showPromptForManualCopy(text);
+      setUploadHint('剪贴板被拦住了。提示词已选中，直接复制即可。', 'error');
+    };
 
     document.getElementById('add-har-btn').onclick = () =>
       document.getElementById('har-file-input').click();
@@ -903,7 +1009,7 @@
     function updateSubtitle() {
       const parts = [
         meta.engine || null,
-        meta.harPath,
+        meta.summary || meta.harPath,
         `${meta.total ?? textures.length} 张纹理`,
         meta.embedded != null ? `内嵌 ${meta.embedded}` : null,
         meta.remote != null ? `远程 ${meta.remote}` : null,
@@ -912,6 +1018,8 @@
         meta.channel ? `channel ${meta.channel}` : null,
         meta.spineCount != null ? `Spine ${meta.spineCount}` : null,
         meta.previewCount != null ? `可预览 ${meta.previewCount}` : null,
+        meta.astcDecoded ? `ASTC 已解码 ${meta.astcDecoded}` : null,
+        meta.astcCount ? `ASTC 未解码 ${meta.astcCount}` : null,
       ].filter(Boolean);
       document.getElementById('subtitle').textContent = parts.join(' · ');
     }
@@ -1009,7 +1117,7 @@
         ['分类', t.category],
         ['格式', t.mime || t.ext],
         ['磁盘体积', t.sizeFmt + (t.size ? ` (${t.size.toLocaleString()} B)` : '')],
-        ['来源', t.srcType === 'embedded' ? 'HAR 内嵌' : t.srcType === 'data' ? 'Data URL' : t.srcType === 'missing' ? 'HAR 无正文' : 'CDN 远程（未预览）'],
+        ['来源', t.source === 'astc' ? '微信本地缓存 · ASTC 已解码' : t.source === 'gamecache' ? '微信本地缓存原文件' : t.source === 'wxapkg' ? '微信包内原文件' : t.srcType === 'embedded' ? 'HAR 内嵌' : t.srcType === 'data' ? 'Data URL' : t.srcType === 'missing' ? 'HAR 无正文' : 'CDN 远程（未预览）'],
       ];
       if (t.spineName) {
         rows.push(['Spine 名称', t.spineName]);
@@ -1312,7 +1420,7 @@
       const list = document.getElementById('anim-list');
       list.innerHTML = '';
       if (!animFiltered.length) {
-        list.innerHTML = '<div class="empty">当前 Tab 无可预览动画（需 Cocos HAR + 内嵌纹理）</div>';
+        list.innerHTML = '<div class="empty">当前 Tab 无可预览动画</div>';
         updateBakeButtons();
         return;
       }
@@ -2418,7 +2526,7 @@
       const count = audioManifest.length || meta.audioCount || 0;
       btn.disabled = count === 0;
       btn.title = count === 0
-        ? '当前 Tab 未识别到音频（仅 Cocos HAR 支持）'
+        ? '当前 Tab 未识别到音频'
         : `识别到 ${count} 个音频`;
       if (count === 0 && viewMode === 'audio') applyViewMode('textures');
     }
@@ -2571,7 +2679,7 @@
       const count = fontManifest.length;
       btn.disabled = count === 0;
       btn.title = count === 0
-        ? '当前 Tab 未识别到位图字体（仅 Cocos HAR 支持）'
+        ? '当前 Tab 未识别到位图字体'
         : `识别到 ${count} 个位图字体`;
       if (count === 0 && viewMode === 'fonts') applyViewMode('textures');
     }
